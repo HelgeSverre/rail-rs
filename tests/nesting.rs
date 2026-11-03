@@ -231,3 +231,20 @@ async fn the_tree_endpoint_shows_the_whole_pyramid() -> Result<()> {
     assert_eq!(tree["upstreams"][1]["name"], "tinyurl");
     Ok(())
 }
+
+#[tokio::test]
+async fn the_tree_marks_a_self_alias_as_a_cycle() -> Result<()> {
+    // An instance that lists itself under another name used to recurse 64 levels deep.
+    let (listener, url) = bind().await?;
+    let alias = Url::parse(&format!("http://localhost:{}/", url.port().unwrap()))?;
+    start(
+        listener,
+        url.clone(),
+        "narcissus",
+        vec![Upstream::Rail(alias)],
+    )?;
+
+    let tree: Value = reqwest::get(url.join("api/tree")?).await?.json().await?;
+    assert_eq!(tree["upstreams"][0]["kind"], "cycle", "{tree}");
+    Ok(())
+}

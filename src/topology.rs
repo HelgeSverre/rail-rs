@@ -2,7 +2,7 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -34,14 +34,24 @@ impl Topology {
     }
 }
 
+/// Topologies are small; anything bigger is a misbehaving (or hostile) upstream.
+const MAX_TOPOLOGY_BYTES: usize = 64 * 1024;
+
 pub async fn fetch(client: &Client, base: &Url) -> Result<Topology> {
-    Ok(client
+    let mut response = client
         .get(base.join("api/topology")?)
         .send()
         .await?
-        .error_for_status()?
-        .json()
-        .await?)
+        .error_for_status()?;
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        body.extend_from_slice(&chunk);
+        ensure!(
+            body.len() <= MAX_TOPOLOGY_BYTES,
+            "topology from {base} is larger than {MAX_TOPOLOGY_BYTES} bytes"
+        );
+    }
+    Ok(serde_json::from_slice(&body)?)
 }
 
 /// Who "me" is, for cycle detection: the configured URL can be spelled many ways
@@ -119,34 +129,62 @@ pub enum TreeNode {
 }
 
 /// Build the tree rooted at a local topology, fetching nested RAIL instances recursively.
-pub async fn tree(client: &Client, root: Topology, ancestors: &[Url]) -> TreeNode {
-    let mut path = ancestors.to_vec();
-    path.push(root.public_url.clone());
+///
+/// At most `MAX_NODES` topologies are fetched in total, however wide the tree is: every node is
+/// advertised by a remote instance we may not operate, and each one costs a request.
+pub async fn tree(client: &Client, root: Topology) -> TreeNode {
+    let mut walk = Walk { client, fetches: 0 };
+    walk.node(root, &mut Vec::new()).await
+}
 
-    let mut upstreams = Vec::with_capacity(root.upstreams.len());
-    for spec in &root.upstreams {
-        let child = match spec.parse() {
-            Ok(Upstream::Rail(url)) if path.contains(&url) => TreeNode::Cycle { public_url: url },
-            Ok(Upstream::Rail(_)) if path.len() >= MAX_NODES => TreeNode::Unreachable {
-                public_url: root.public_url.clone(),
-                error: "tree too deep".into(),
-            },
-            Ok(Upstream::Rail(url)) => match fetch(client, &url).await {
-                Ok(topology) => Box::pin(tree(client, topology, &path)).await,
-                Err(e) => TreeNode::Unreachable {
-                    public_url: url,
-                    error: format!("{e:#}"),
-                },
-            },
-            _ => TreeNode::Shortener { name: spec.clone() },
+struct Walk<'a> {
+    client: &'a Client,
+    fetches: usize,
+}
+
+impl Walk<'_> {
+    /// `path` holds the ancestors on the current branch, so a node that is any of them,
+    /// under any name, is reported as a cycle.
+    async fn node(&mut self, root: Topology, path: &mut Vec<Topology>) -> TreeNode {
+        let on_path = |path: &[Topology], url: &Url, id: Option<&str>| {
+            path.iter()
+                .any(|t| t.public_url == *url || id.is_some_and(|id| !id.is_empty() && t.id == id))
         };
-        upstreams.push(child);
-    }
+        path.push(root.clone());
+        let mut upstreams = Vec::new();
+        for spec in root.upstreams.iter().take(MAX_FANOUT) {
+            let child = match spec.parse() {
+                Ok(Upstream::Rail(url)) if on_path(path, &url, None) => {
+                    TreeNode::Cycle { public_url: url }
+                }
+                Ok(Upstream::Rail(url)) if self.fetches >= MAX_NODES => TreeNode::Unreachable {
+                    public_url: url,
+                    error: format!("tree walk stopped after {MAX_NODES} instances"),
+                },
+                Ok(Upstream::Rail(url)) => {
+                    self.fetches += 1;
+                    match fetch(self.client, &url).await {
+                        Ok(t) if on_path(path, &t.public_url, Some(&t.id)) => {
+                            TreeNode::Cycle { public_url: url }
+                        }
+                        Ok(t) => Box::pin(self.node(t, path)).await,
+                        Err(e) => TreeNode::Unreachable {
+                            public_url: url,
+                            error: format!("{e:#}"),
+                        },
+                    }
+                }
+                _ => TreeNode::Shortener { name: spec.clone() },
+            };
+            upstreams.push(child);
+        }
+        path.pop();
 
-    TreeNode::Rail {
-        instance: root.instance,
-        public_url: root.public_url,
-        upstreams,
+        TreeNode::Rail {
+            instance: root.instance,
+            public_url: root.public_url,
+            upstreams,
+        }
     }
 }
 

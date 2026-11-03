@@ -405,7 +405,7 @@ async fn get_topology(State(state): State<SharedState>) -> Json<Topology> {
 }
 
 async fn get_tree(State(state): State<SharedState>) -> Json<TreeNode> {
-    Json(topology::tree(&state.client, state.topology(), &[]).await)
+    Json(topology::tree(&state.client, state.topology()).await)
 }
 
 #[derive(Serialize)]
