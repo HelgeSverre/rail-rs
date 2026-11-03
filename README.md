@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/header.jpg" alt="rail: Redundant Array of Inexpensive Links. Load balancers, all the way down.">
+  <img src=".github/assets/header.jpg" alt="The world's first autonomous self-balancing link cloud. RAIL Enterprise Edition 26ai. 99.99999% link availability. Requires RAIL. Licensed per redirect.">
 </p>
 
 <p align="center">
