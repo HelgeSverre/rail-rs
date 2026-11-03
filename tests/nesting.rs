@@ -33,6 +33,8 @@ fn start(
         upstreams,
         strategy: Strategy::RoundRobin,
         health_interval: Duration::from_secs(3600),
+        // The test target lives on loopback.
+        allow_private_targets: true,
     };
     let store = Store::open(":memory:")?;
     tokio::spawn(rail::serve(config, store, listener));

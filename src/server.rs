@@ -31,6 +31,7 @@ use crate::{
     balancer::{Balancer, Strategy},
     new_id, now,
     store::{Link, Mirror, Store},
+    target,
     topology::{self, Topology, TreeNode},
     trace::{BROWSER_REDIRECT_LIMIT, Trace, trace},
     upstream::{Upstream, X_RAIL_CHAIN},
@@ -282,14 +283,9 @@ async fn shorten(
     Json(body): Json<ShortenBody>,
 ) -> Result<Json<ShortenResponse>, AppError> {
     let chain = Arc::new(extend_chain(&state, &headers)?);
-    let target = Url::parse(body.url.trim())
-        .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, format!("invalid url: {e}")))?;
-    if !matches!(target.scheme(), "http" | "https") {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "only http and https URLs can be shortened",
-        ));
-    }
+    let target = target::validate(&body.url, state.config.allow_private_targets)
+        .await
+        .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, e.to_string()))?;
     let target = String::from(target);
 
     let _target_lock = state.lock_target(&target).await;

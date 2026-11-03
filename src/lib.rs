@@ -9,6 +9,7 @@ pub mod dns;
 pub mod health;
 pub mod server;
 pub mod store;
+pub mod target;
 pub mod topology;
 pub mod trace;
 pub mod upstream;
@@ -32,6 +33,9 @@ pub struct Config {
     pub upstreams: Vec<Upstream>,
     pub strategy: Strategy,
     pub health_interval: Duration,
+    /// Accept targets on loopback, private and link-local addresses. Off by default: every
+    /// target is fetched by the health checker, so this would make RAIL an SSRF probe.
+    pub allow_private_targets: bool,
 }
 
 /// Serve RAIL on `listener` until the process dies, with the health checker in the background.

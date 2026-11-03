@@ -50,6 +50,9 @@ struct ServeArgs {
     /// Seconds between health sweeps. Each nested layer sweeps independently, so be polite.
     #[arg(long, env = "RAIL_HEALTH_INTERVAL", default_value_t = 300)]
     health_interval: u64,
+    /// Accept targets on loopback, private and link-local addresses (intranet deployments).
+    #[arg(long, env = "RAIL_ALLOW_PRIVATE_TARGETS")]
+    allow_private_targets: bool,
 }
 
 #[tokio::main]
@@ -102,6 +105,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         upstreams,
         strategy: args.strategy,
         health_interval: Duration::from_secs(args.health_interval.max(1)),
+        allow_private_targets: args.allow_private_targets,
     };
     let store = Store::open(&args.db)?;
     let listener = TcpListener::bind(&args.listen)
