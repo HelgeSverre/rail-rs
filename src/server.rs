@@ -48,8 +48,6 @@ pub struct AppState {
     /// Never follows redirects: RAIL needs to see every hop.
     pub client: Client,
     pub balancer: Balancer,
-    /// Rail upstreams currently excluded because they route back to us, with the offending path.
-    pub cyclic: Mutex<HashMap<Upstream, Vec<Url>>>,
     /// One lock per target being shortened right now, so concurrent requests for the same URL
     /// produce one link instead of racing between lookup and insert.
     inflight: std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>,
@@ -81,7 +79,6 @@ impl AppState {
             config,
             store,
             client,
-            cyclic: Mutex::default(),
             inflight: std::sync::Mutex::default(),
         })
     }
@@ -147,21 +144,21 @@ impl AppState {
                         upstream: upstream.to_string(),
                         error: format!("cycle: {shown}"),
                     });
-                    self.cyclic.lock().await.insert(upstream.clone(), path);
                     continue;
                 }
-                self.cyclic.lock().await.remove(upstream);
             }
             usable.push(upstream.clone());
         }
         (usable, skipped)
     }
 
-    fn response(&self, link: Link, failed: Vec<Failure>, reused: bool) -> ShortenResponse {
+    fn response(&self, link: Link, failed: Vec<Failure>, reused: Option<bool>) -> ShortenResponse {
         let short_url = self.short_url(&link.id);
         let ratio = short_url.len() as f64 / link.target.len().max(1) as f64;
         ShortenResponse {
-            degraded: link.mirrors.is_empty(),
+            // Whatever the reason (none minted, all evicted), this is when `/{id}` serves the
+            // raw target.
+            degraded: !link.mirrors.iter().any(|m| m.healthy),
             compression_ratio: (ratio * 100.0).round() / 100.0,
             short_url,
             reused,
@@ -234,10 +231,11 @@ pub struct ShortenResponse {
     pub short_url: String,
     /// Short URL length over target length. Above 1.0 means we made it longer. Congratulations.
     pub compression_ratio: f64,
-    /// No upstream succeeded; this instance redirects straight to the target.
+    /// No healthy mirror: this instance redirects straight to the target.
     pub degraded: bool,
-    /// The target was already shortened before; no shorteners were bothered.
-    pub reused: bool,
+    /// On shorten: the target was already shortened before, so no shorteners were bothered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reused: Option<bool>,
     pub failed: Vec<Failure>,
     #[serde(flatten)]
     pub link: Link,
@@ -290,7 +288,7 @@ async fn shorten(
 
     let _target_lock = state.lock_target(&target).await;
     if let Some(link) = state.store.find_by_target(&target)? {
-        return Ok(Json(state.response(link, Vec::new(), true)));
+        return Ok(Json(state.response(link, Vec::new(), Some(true))));
     }
 
     let (upstreams, mut failed) = state.usable_upstreams().await;
@@ -328,7 +326,7 @@ async fn shorten(
         mirrors,
     };
     state.store.insert(&link)?;
-    Ok(Json(state.response(link, failed, false)))
+    Ok(Json(state.response(link, failed, Some(false))))
 }
 
 async fn redirect(
@@ -367,7 +365,7 @@ async fn info(
         .store
         .get(&id)?
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "no such link"))?;
-    Ok(Json(state.response(link, Vec::new(), true)))
+    Ok(Json(state.response(link, Vec::new(), None)))
 }
 
 async fn trace_link(
@@ -428,4 +426,42 @@ async fn index(State(state): State<SharedState>) -> Html<String> {
     };
     let json = serde_json::to_string(&info).unwrap_or_else(|_| "{}".into());
     Html(include_str!("index.html").replace("/*RAIL_INFO*/null", &json))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn a_link_whose_mirrors_are_all_down_is_degraded() -> anyhow::Result<()> {
+        let state = AppState::new(
+            Config {
+                name: "t".into(),
+                public_url: Url::parse("http://rail.test/")?,
+                upstreams: vec![],
+                strategy: Strategy::RoundRobin,
+                health_interval: Duration::from_secs(1),
+                allow_private_targets: false,
+            },
+            Store::open(":memory:")?,
+        )?;
+        let mut mirror = Mirror::new("is.gd", "https://is.gd/x");
+        let link = |mirrors: Vec<Mirror>| Link {
+            id: "abc".into(),
+            target: "https://example.com/".into(),
+            created_at: 0,
+            mirrors,
+        };
+        assert!(
+            !state
+                .response(link(vec![mirror.clone()]), vec![], None)
+                .degraded
+        );
+        mirror.healthy = false;
+        assert!(state.response(link(vec![mirror]), vec![], None).degraded);
+        assert!(state.response(link(vec![]), vec![], None).degraded);
+        Ok(())
+    }
 }
