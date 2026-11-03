@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+      - run: helm lint --strict charts/rail
+      - name: Validate rendered manifests
+        run: |
+          helm template demo charts/rail -n rail > rendered.yaml
+          docker run --rm -i ghcr.io/yannh/kubeconform:latest -strict -summary - < rendered.yaml
+      - name: Reject references to unknown instances
+        run: |
+          printf 'instances:\n  - name: lonely\n    upstreams: [rail:nope]\n' > bad.yaml
+          if helm template demo charts/rail -f bad.yaml 2> err.txt; then
+            echo "chart rendered an invalid topology"; exit 1
+          fi
+          grep -q 'no instance is named "nope"' err.txt
+
+  compose:
+    name: Pyramid (docker compose, offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Start the pyramid
+        run: docker compose -f compose.yaml -f compose.ci.yaml up -d --build --wait
+      - name: Shorten through six instances and trace it
+        run: |
+          short=$(docker compose exec -T edge curl -fsS -X POST http://edge.rail.localhost:8080/api/shorten \
+            -H 'content-type: application/json' -d '{"url":"https://example.com/ci"}' | jq -r .short_url)
+          echo "short url: $short"
+          for visit in 1 2 3; do
+            docker compose exec -T edge rail trace "$short" | tee trace.txt
+            grep -q '\[rail:edge\]' trace.txt
+            grep -Eq '\[rail:mid-(1|2)\]' trace.txt
+            grep -Eq '\[rail:leaf-(a|b|c)\]' trace.txt
+            grep -q 'https://example.com/ci' trace.txt
+          done
+          docker compose exec -T edge curl -fsS http://edge.rail.localhost:8080/api/tree
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down -v
+
+  kubernetes:
+    name: Pyramid (kind + helm test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: rail
+      - name: Build and load image
+        run: |
+          docker build -t rail-rs:ci .
+          kind load docker-image rail-rs:ci --name rail
+      - name: Install
+        run: |
+          helm upgrade --install demo charts/rail -n rail --create-namespace --wait --timeout 5m \
+            --set image.repository=rail-rs --set image.tag=ci --set image.pullPolicy=Never
+      - name: helm test
+        run: helm test demo -n rail --logs
+      - if: failure()
+        run: kubectl -n rail get pods -o wide && kubectl -n rail logs -l app.kubernetes.io/name=rail --tail=100
