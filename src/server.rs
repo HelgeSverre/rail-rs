@@ -339,7 +339,7 @@ async fn redirect(
         .store
         .get(&id)?
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "no such link"))?;
-    let (location, upstream) = match state.balancer.pick(&link.mirrors) {
+    let (location, upstream) = match state.balancer.pick(&link.id, &link.mirrors) {
         Some(mirror) => (mirror.short_url.as_str(), mirror.upstream.as_str()),
         None => (
             link.target.as_str(),
