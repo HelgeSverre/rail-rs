@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/header.jpg" alt="RAIL Cloud: The #1 Redundant Array of Inexpensive Links. Start your free trial.">
+  <img src=".github/assets/header.jpg" alt="rail: Redundant Array of Inexpensive Links. Load balancers, all the way down.">
 </p>
 
 <p align="center">
@@ -49,8 +49,6 @@ another RAIL deployment. We call this **Recursive Redundancy™**.
 - [Acknowledgements](#acknowledgements)
 
 ## Executive summary
-
-<img src=".github/assets/enterprise-edition.jpg" alt="The world's first autonomous self-balancing link cloud. RAIL Enterprise Edition 26ai.">
 
 | | |
 | --- | --- |
