@@ -23,8 +23,6 @@ jobs:
           - { target: x86_64-apple-darwin, os: macos-latest }
           - { target: aarch64-apple-darwin, os: macos-latest }
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -42,12 +40,32 @@ jobs:
           cp "target/${{ matrix.target }}/release/rail" README.md LICENSE "$name/"
           tar czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rail-${{ matrix.target }}
+          path: rail-${{ matrix.target }}.tar.gz*
+          if-no-files-found: error
+
+  # One job creates the release: four matrix jobs racing to create it can fail with
+  # "already_exists" and generate the notes four times.
+  release:
+    name: GitHub release
+    needs: binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: rail-*
+          merge-multiple: true
       - uses: softprops/action-gh-release@v3
         with:
           files: |
             rail-*.tar.gz
             rail-*.tar.gz.sha256
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
   image:
     name: Image (${{ matrix.arch }})
@@ -92,8 +110,10 @@ jobs:
       - name: Merge architectures
         run: |
           version="${GITHUB_REF_NAME#v}"
-          docker buildx imagetools create \
-            -t "$IMAGE:$version" -t "$IMAGE:latest" \
+          tags=(-t "$IMAGE:$version")
+          # Prereleases (v1.2.0-rc1) never move :latest.
+          [[ "$version" == *-* ]] || tags+=(-t "$IMAGE:latest")
+          docker buildx imagetools create "${tags[@]}" \
             "$IMAGE:${GITHUB_REF_NAME}-amd64" "$IMAGE:${GITHUB_REF_NAME}-arm64"
 
   chart:

@@ -43,6 +43,8 @@ jobs:
       - name: Validate rendered manifests
         run: |
           helm template demo charts/rail -n rail > rendered.yaml
+          helm template demo charts/rail -n rail --set ingress.enabled=true \
+            --set ingress.tls.enabled=true --set ingress.tls.secretName=rail-tls >> rendered.yaml
           docker run --rm -i ghcr.io/yannh/kubeconform:latest -strict -summary - < rendered.yaml
       - name: Reject references to unknown instances
         run: |
@@ -64,7 +66,7 @@ jobs:
           short=$(docker compose exec -T edge curl -fsS -X POST http://edge.rail.localhost:8080/api/shorten \
             -H 'content-type: application/json' -d '{"url":"https://example.com/ci"}' | jq -r .short_url)
           echo "short url: $short"
-          for visit in 1 2 3; do
+          for _ in 1 2 3; do
             docker compose exec -T edge rail trace "$short" | tee trace.txt
             grep -q '\[rail:edge\]' trace.txt
             grep -Eq '\[rail:mid-(1|2)\]' trace.txt
@@ -93,6 +95,7 @@ jobs:
       - name: Install
         run: |
           helm upgrade --install demo charts/rail -n rail --create-namespace --wait --timeout 5m \
+            -f charts/rail/ci/offline-values.yaml \
             --set image.repository=rail-rs --set image.tag=ci --set image.pullPolicy=Never
       - name: helm test
         run: helm test demo -n rail --logs
