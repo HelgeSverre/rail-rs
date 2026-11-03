@@ -25,6 +25,8 @@ pub enum ParseUpstreamError {
     Unknown(String),
     #[error("invalid rail upstream URL")]
     BadRailUrl(#[from] url::ParseError),
+    #[error("rail upstream must be an http(s) base URL, got {0}")]
+    NotHttp(Url),
 }
 
 impl FromStr for Upstream {
@@ -32,7 +34,11 @@ impl FromStr for Upstream {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some(base) = s.strip_prefix("rail+") {
-            return Ok(Self::Rail(Url::parse(base)?));
+            let base = Url::parse(base)?;
+            if !matches!(base.scheme(), "http" | "https") || base.cannot_be_a_base() {
+                return Err(ParseUpstreamError::NotHttp(base));
+            }
+            return Ok(Self::Rail(base));
         }
         match s {
             "is.gd" => Ok(Self::IsGd),
@@ -130,6 +136,26 @@ impl Upstream {
     }
 }
 
+/// Parse an upstream list from config. `none` and blanks are skipped; duplicates are an error,
+/// because every mirror is keyed by its upstream.
+pub fn parse_all<'a>(specs: impl IntoIterator<Item = &'a str>) -> Result<Vec<Upstream>> {
+    let mut upstreams: Vec<Upstream> = Vec::new();
+    for spec in specs.into_iter().map(str::trim) {
+        if spec.is_empty() || spec == "none" {
+            continue;
+        }
+        let upstream: Upstream = spec
+            .parse()
+            .with_context(|| format!("invalid upstream {spec:?}"))?;
+        ensure!(
+            !upstreams.contains(&upstream),
+            "upstream {upstream} is listed more than once"
+        );
+        upstreams.push(upstream);
+    }
+    Ok(upstreams)
+}
+
 /// The classic shortener API: GET with a query string, receive the short URL as plain text.
 async fn simple_get(client: &Client, endpoint: &str, params: &[(&str, &str)]) -> Result<String> {
     let url = Url::parse_with_params(endpoint, params)?;
@@ -160,6 +186,25 @@ mod tests {
             assert_eq!(upstream.to_string(), spec);
             assert_eq!(upstream.to_string().parse::<Upstream>().unwrap(), upstream);
         }
+    }
+
+    #[test]
+    fn rejects_non_http_rail_upstreams() {
+        for spec in ["rail+mailto:x", "rail+rail+http://x", "rail+ftp://x"] {
+            assert!(
+                spec.parse::<Upstream>().is_err(),
+                "{spec} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_all_rejects_duplicates_and_skips_none() {
+        assert_eq!(parse_all(["none", ""]).unwrap(), vec![]);
+        assert_eq!(parse_all(["is.gd", "v.gd"]).unwrap().len(), 2);
+        assert!(parse_all(["is.gd", "is.gd"]).is_err());
+        // The same instance written two ways is still the same instance.
+        assert!(parse_all(["rail+http://a:1", "rail+http://a:1/"]).is_err());
     }
 
     #[test]

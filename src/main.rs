@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use rail::{Config, balancer::Strategy, store::Store, trace::trace, upstream::Upstream};
+use rail::{Config, balancer::Strategy, store::Store, trace::trace};
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -95,13 +95,7 @@ async fn main() -> Result<()> {
 }
 
 async fn serve(args: ServeArgs) -> Result<()> {
-    let upstreams = args
-        .upstreams
-        .iter()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty() && *s != "none")
-        .map(str::parse)
-        .collect::<Result<Vec<Upstream>, _>>()?;
+    let upstreams = rail::upstream::parse_all(args.upstreams.iter().map(String::as_str))?;
     let config = Config {
         name: args.name,
         public_url: args.public_url,
