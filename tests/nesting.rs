@@ -106,6 +106,22 @@ async fn reshortening_the_same_target_reuses_the_link() -> Result<()> {
 }
 
 #[tokio::test]
+async fn concurrent_shortens_of_one_target_make_one_link() -> Result<()> {
+    let target = target().await?;
+    let leaf = rail("leaf", vec![]).await?;
+    let top = rail("top", vec![Upstream::Rail(leaf)]).await?;
+
+    let requests = (0..10).map(|_| shorten(&top, &target));
+    let responses = futures_util::future::try_join_all(requests).await?;
+    let ids: std::collections::HashSet<_> = responses.iter().map(|r| r["id"].clone()).collect();
+    assert_eq!(ids.len(), 1, "{ids:?}");
+
+    let links: Vec<Value> = reqwest::get(top.join("api/links")?).await?.json().await?;
+    assert_eq!(links.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn cyclic_upstreams_are_refused() -> Result<()> {
     let target = target().await?;
     let (la, a) = bind().await?;

@@ -1,6 +1,9 @@
 //! HTTP surface: shorten, redirect, introspect.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, PoisonError},
+};
 
 use anyhow::anyhow;
 use axum::{
@@ -16,7 +19,10 @@ use axum::{
 use qrcode::{QrCode, render::svg};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio::{sync::Mutex, task::JoinSet};
+use tokio::{
+    sync::{Mutex, OwnedMutexGuard},
+    task::JoinSet,
+};
 use tracing::warn;
 use url::Url;
 
@@ -43,6 +49,26 @@ pub struct AppState {
     pub balancer: Balancer,
     /// Rail upstreams currently excluded because they route back to us, with the offending path.
     pub cyclic: Mutex<HashMap<Upstream, Vec<Url>>>,
+    /// One lock per target being shortened right now, so concurrent requests for the same URL
+    /// produce one link instead of racing between lookup and insert.
+    inflight: std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+/// Holds a target's lock; dropping it releases the lock and forgets idle locks.
+struct TargetGuard<'a> {
+    state: &'a AppState,
+    guard: Option<OwnedMutexGuard<()>>,
+}
+
+impl Drop for TargetGuard<'_> {
+    fn drop(&mut self) {
+        self.guard.take();
+        self.state
+            .inflight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|_, lock| Arc::strong_count(lock) > 1);
+    }
 }
 
 impl AppState {
@@ -55,7 +81,22 @@ impl AppState {
             store,
             client,
             cyclic: Mutex::default(),
+            inflight: std::sync::Mutex::default(),
         })
+    }
+
+    async fn lock_target(&self, target: &str) -> TargetGuard<'_> {
+        let lock = Arc::clone(
+            self.inflight
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(target.to_owned())
+                .or_default(),
+        );
+        TargetGuard {
+            state: self,
+            guard: Some(lock.lock_owned().await),
+        }
     }
 
     fn short_url(&self, id: &str) -> String {
@@ -251,6 +292,7 @@ async fn shorten(
     }
     let target = String::from(target);
 
+    let _target_lock = state.lock_target(&target).await;
     if let Some(link) = state.store.find_by_target(&target)? {
         return Ok(Json(state.response(link, Vec::new(), true)));
     }
