@@ -1,0 +1,10 @@
+apiVersion: v2
+name: rail
+description: >-
+  RAIL (Redundant Array of Inexpensive Links): a URL shortener that load-balances across other
+  URL shorteners, deployed as a pyramid of itself on Kubernetes, because a single binary was
+  insufficiently enterprise.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [url-shortener, load-balancer, why]

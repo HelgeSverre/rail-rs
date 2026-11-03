@@ -1,0 +1,101 @@
+{{- $root := . -}}
+{{- range $instance := .Values.instances }}
+{{- $ctx := dict "root" $root "name" $instance.name }}
+{{- $fullname := include "rail.instanceName" $ctx }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "rail.labels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "rail.selector" $ctx | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $root.Values.port }}
+      targetPort: http
+{{- if $root.Values.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "rail.labels" $ctx | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ $root.Values.persistence.size }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "rail.labels" $ctx | nindent 4 }}
+spec:
+  # One SQLite database per pod. Do not scale this. Nest it.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "rail.selector" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rail.labels" $ctx | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: rail
+          image: "{{ $root.Values.image.repository }}:{{ $root.Values.image.tag | default $root.Chart.AppVersion }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          args: [serve]
+          env:
+            - name: RAIL_NAME
+              value: {{ $instance.name | quote }}
+            - name: RAIL_LISTEN
+              value: "0.0.0.0:{{ $root.Values.port }}"
+            - name: RAIL_PUBLIC_URL
+              value: {{ include "rail.instanceUrl" $ctx | quote }}
+            - name: RAIL_UPSTREAMS
+              value: {{ include "rail.upstreams" (dict "root" $root "instance" $instance) | quote }}
+            - name: RAIL_STRATEGY
+              value: {{ $instance.strategy | default $root.Values.defaultStrategy | quote }}
+            - name: RAIL_HEALTH_INTERVAL
+              value: {{ $root.Values.healthInterval | quote }}
+          ports:
+            - name: http
+              containerPort: {{ $root.Values.port }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          resources:
+            {{- toYaml $root.Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          {{- if $root.Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}

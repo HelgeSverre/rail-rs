@@ -1,0 +1,48 @@
+image:
+  repository: ghcr.io/helgesverre/rail-rs
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+port: 8080
+clusterDomain: cluster.local
+# Seconds between health sweeps, per instance. Every layer sweeps independently.
+healthInterval: 60
+defaultStrategy: round-robin
+
+# Each instance keeps its own SQLite database, so replicas must stay at 1.
+# Scaling horizontally is what nesting is for.
+persistence:
+  enabled: false
+  size: 64Mi
+
+resources:
+  requests: { cpu: 5m, memory: 16Mi }
+  limits: { memory: 64Mi }
+
+# The topology. Upstreams are shortener names (is.gd, v.gd, tinyurl, da.gd, ulvis) or
+# `rail:<instance>` to reference another instance in this release. Cycles are allowed to
+# deploy, and RAIL refuses them at runtime, as is tradition.
+instances:
+  - name: leaf-a
+    upstreams: [is.gd, v.gd]
+  - name: leaf-b
+    upstreams: [tinyurl, da.gd]
+    strategy: fastest
+  - name: leaf-c
+    upstreams: [ulvis, is.gd]
+    strategy: random
+  - name: mid-1
+    upstreams: [rail:leaf-a, rail:leaf-b]
+  - name: mid-2
+    upstreams: [rail:leaf-b, rail:leaf-c]
+  - name: edge
+    upstreams: [rail:mid-1, rail:mid-2, tinyurl]
+
+ingress:
+  enabled: false
+  className: ""
+  # Exposes the instance named here. Its public URL becomes http(s)://<host>.
+  instance: edge
+  host: rail.localhost
+  tls: false

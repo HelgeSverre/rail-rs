@@ -1,0 +1,25 @@
+{{- $top := last .Values.instances }}
+{{- $ctx := dict "root" . "name" $top.name }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "rail.instanceName" $ctx }}-test
+  labels:
+    {{- include "rail.labels" $ctx | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  restartPolicy: Never
+  containers:
+    - name: trace
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      command: [sh, -ec]
+      args:
+        - |
+          base={{ include "rail.instanceUrl" $ctx | quote }}
+          id=$(curl -fsS -X POST "$base/api/shorten" -H 'content-type: application/json' \
+            -d '{"url":"https://example.com/helm-test"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          test -n "$id"
+          rail trace "$base/$id" | tee /dev/stderr | grep -q 'example.com/helm-test'
