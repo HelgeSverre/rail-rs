@@ -125,7 +125,68 @@ async fn cyclic_upstreams_are_refused() -> Result<()> {
 }
 
 #[tokio::test]
-async fn a_tower_of_21_breaks_the_browser() -> Result<()> {
+async fn cycles_through_aliases_are_refused() -> Result<()> {
+    // a reaches b as `localhost`, b reaches a as `localhost`, but each calls itself 127.0.0.1.
+    // Only identity, not URL spelling, can tell these are the same instances.
+    let target = target().await?;
+    let (la, a) = bind().await?;
+    let (lb, b) = bind().await?;
+    let alias = |u: &Url| -> Result<Upstream> {
+        Ok(Upstream::Rail(Url::parse(&format!(
+            "http://localhost:{}/",
+            u.port().unwrap()
+        ))?))
+    };
+    start(la, a.clone(), "a", vec![alias(&b)?])?;
+    start(lb, b.clone(), "b", vec![alias(&a)?])?;
+
+    let resp = shorten(&a, &target).await?;
+    assert_eq!(resp["degraded"], true, "{resp}");
+    assert!(
+        resp["failed"][0]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("cycle:")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_chain_header_stops_loops_detection_missed() -> Result<()> {
+    let target = target().await?;
+    let leaf = rail("leaf", vec![]).await?;
+    let topology: Value = reqwest::get(leaf.join("api/topology")?)
+        .await?
+        .json()
+        .await?;
+    let id = topology["id"].as_str().unwrap();
+
+    let client = reqwest::Client::new();
+    let looped = client
+        .post(leaf.join("api/shorten")?)
+        .header("x-rail-chain", format!("someone-else,{id}"))
+        .json(&json!({ "url": target }))
+        .send()
+        .await?;
+    assert_eq!(looped.status(), 508);
+
+    let too_deep = client
+        .post(leaf.join("api/shorten")?)
+        .header(
+            "x-rail-chain",
+            (0..20).map(|i| i.to_string()).collect::<Vec<_>>().join(","),
+        )
+        .json(&json!({ "url": target }))
+        .send()
+        .await?;
+    assert_eq!(too_deep.status(), 508);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_tower_of_21_is_capped_at_the_browser_limit() -> Result<()> {
+    // 21 nested instances would need 21 redirects, one more than browsers follow. The bottom
+    // floor refuses the 21st hop, the floor above it degrades, and the link stays followable.
     let target = target().await?;
     let mut url = rail("floor-0", vec![]).await?;
     for floor in 1..=BROWSER_REDIRECT_LIMIT {
@@ -134,11 +195,10 @@ async fn a_tower_of_21_breaks_the_browser() -> Result<()> {
 
     let resp = shorten(&url, &target).await?;
     let t = trace(&no_redirects(), resp["short_url"].as_str().unwrap()).await?;
-    assert!(
-        t.gave_up,
-        "21 redirects should exceed the limit of {BROWSER_REDIRECT_LIMIT}"
-    );
-    assert!(t.headroom < 0);
+    assert!(!t.gave_up, "{t:?}");
+    assert_eq!(t.redirects, BROWSER_REDIRECT_LIMIT);
+    assert_eq!(t.headroom, 0);
+    assert!(t.visits(&target));
     Ok(())
 }
 

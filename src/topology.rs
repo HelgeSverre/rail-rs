@@ -11,10 +11,15 @@ use crate::upstream::Upstream;
 
 /// Bail out of graph walks that look suspiciously like the whole internet.
 const MAX_NODES: usize = 64;
+/// Upstreams considered per instance. A remote topology can list anything; we don't have to read it all.
+const MAX_FANOUT: usize = 32;
 
 /// What `/api/topology` returns: one instance and its direct upstreams.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Topology {
+    /// Random per-process identity. Two URLs that reach the same instance report the same id.
+    #[serde(default)]
+    pub id: String,
     pub instance: String,
     pub public_url: Url,
     pub upstreams: Vec<String>,
@@ -39,37 +44,52 @@ pub async fn fetch(client: &Client, base: &Url) -> Result<Topology> {
         .await?)
 }
 
+/// Who "me" is, for cycle detection: the configured URL can be spelled many ways
+/// (`localhost` vs `127.0.0.1`, a Docker alias, a trailing slash), the id cannot.
+#[derive(Debug, Clone, Copy)]
+pub struct Identity<'a> {
+    pub id: &'a str,
+    pub url: &'a Url,
+}
+
+impl Identity<'_> {
+    fn is(&self, topology: &Topology) -> bool {
+        (!topology.id.is_empty() && topology.id == self.id) || topology.public_url == *self.url
+    }
+}
+
 /// Breadth-first search from `start` for a path back to `me`.
 ///
-/// Returns the path `start -> ... -> me` if `me` is reachable. Unreachable nodes are skipped:
-/// a cycle we can't see is a cycle for the health checker to discover the hard way.
-pub async fn find_cycle<F, Fut>(me: &Url, start: &Url, mut fetch: F) -> Option<Vec<Url>>
+/// Returns the path `start -> ... -> node`, where `node` is `me` under whatever name the graph
+/// uses for it. Unreachable nodes are skipped; the `X-Rail-Chain` guard on `/api/shorten` stops
+/// any cycle this misses.
+pub async fn find_cycle<F, Fut>(me: Identity<'_>, start: &Url, mut fetch: F) -> Option<Vec<Url>>
 where
     F: FnMut(Url) -> Fut,
     Fut: Future<Output = Result<Topology>>,
 {
-    if start == me {
-        return Some(vec![me.clone()]);
-    }
     let mut queue = VecDeque::from([vec![start.clone()]]);
     let mut seen = HashSet::from([start.clone()]);
 
     while let Some(path) = queue.pop_front() {
+        let node = path.last().expect("paths always start with `start`");
+        if node == me.url {
+            return Some(path);
+        }
         if seen.len() > MAX_NODES {
             break;
         }
-        let node = path.last().expect("paths always start with `start`");
         let Ok(topology) = fetch(node.clone()).await else {
             continue;
         };
-        for next in topology.rail_upstreams() {
-            let found = next == *me;
-            if found || seen.insert(next.clone()) {
+        if me.is(&topology) {
+            return Some(path);
+        }
+        seen.insert(topology.public_url.clone());
+        for next in topology.rail_upstreams().take(MAX_FANOUT) {
+            if seen.insert(next.clone()) || next == *me.url {
                 let mut extended = path.clone();
                 extended.push(next);
-                if found {
-                    return Some(extended);
-                }
                 queue.push_back(extended);
             }
         }
@@ -147,6 +167,7 @@ mod tests {
             .iter()
             .map(|(node, ups)| {
                 let topology = Topology {
+                    id: format!("id-{node}"),
                     instance: (*node).into(),
                     public_url: url(node),
                     upstreams: ups
@@ -162,7 +183,13 @@ mod tests {
 
     async fn search(g: &HashMap<Url, Topology>, me: &str, start: &str) -> Option<Vec<String>> {
         let fetch = |u: Url| std::future::ready(g.get(&u).cloned().ok_or_else(|| anyhow!("down")));
-        find_cycle(&url(me), &url(start), fetch).await.map(|p| {
+        let me_url = url(me);
+        let me_id = format!("id-{me}");
+        let me = Identity {
+            id: &me_id,
+            url: &me_url,
+        };
+        find_cycle(me, &url(start), fetch).await.map(|p| {
             p.iter()
                 .map(|u| {
                     u.host_str()
@@ -199,6 +226,19 @@ mod tests {
         assert_eq!(
             search(&HashMap::new(), "a", "a").await,
             Some(vec!["a".into()])
+        );
+    }
+
+    #[tokio::test]
+    async fn aliases_of_me_are_recognized_by_id() {
+        // b points back at a, but under a different name ("a-alias") that serves a's topology.
+        let mut g = graph(&[("b", &["a-alias"])]);
+        let mut alias = graph(&[("a", &["b"])]).remove(&url("a")).unwrap();
+        alias.public_url = url("a-alias");
+        g.insert(url("a-alias"), alias);
+        assert_eq!(
+            search(&g, "a", "b").await,
+            Some(vec!["b".into(), "a-alias".into()])
         );
     }
 

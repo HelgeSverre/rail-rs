@@ -70,6 +70,9 @@ impl Serialize for Upstream {
     }
 }
 
+/// Comma-separated ids of the RAIL instances a shorten request has already passed through.
+pub const X_RAIL_CHAIN: &str = "x-rail-chain";
+
 #[derive(Debug, Serialize)]
 pub struct ShortenRequest<'a> {
     pub url: &'a str,
@@ -81,8 +84,10 @@ struct RailShortenResponse {
 }
 
 impl Upstream {
-    /// Ask this upstream to shorten `target`, returning the short URL it minted.
-    pub async fn shorten(&self, client: &Client, target: &str) -> Result<String> {
+    /// Ask this upstream to shorten `target`, returning the short URL it minted. `chain` is the
+    /// list of RAIL instance ids this request has already passed through, forwarded to nested
+    /// RAILs so a loop terminates even when cycle detection misses it.
+    pub async fn shorten(&self, client: &Client, target: &str, chain: &[String]) -> Result<String> {
         let raw = match self {
             Self::IsGd => {
                 simple_get(
@@ -115,6 +120,7 @@ impl Upstream {
             Self::Rail(base) => {
                 client
                     .post(base.join("api/shorten")?)
+                    .header(X_RAIL_CHAIN, chain.join(","))
                     .json(&ShortenRequest { url: target })
                     .send()
                     .await?

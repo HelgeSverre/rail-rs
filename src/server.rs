@@ -7,7 +7,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::{
-        HeaderName, StatusCode,
+        HeaderMap, HeaderName, StatusCode,
         header::{CACHE_CONTROL, CONTENT_TYPE, LOCATION},
     },
     response::{Html, IntoResponse, Response},
@@ -26,8 +26,8 @@ use crate::{
     new_id, now,
     store::{Link, Mirror, Store},
     topology::{self, Topology, TreeNode},
-    trace::{Trace, trace},
-    upstream::Upstream,
+    trace::{BROWSER_REDIRECT_LIMIT, Trace, trace},
+    upstream::{Upstream, X_RAIL_CHAIN},
 };
 
 pub const X_RAIL_INSTANCE: HeaderName = HeaderName::from_static("x-rail-instance");
@@ -35,6 +35,8 @@ pub const X_RAIL_UPSTREAM: HeaderName = HeaderName::from_static("x-rail-upstream
 
 pub struct AppState {
     pub config: Config,
+    /// Random per-process identity, published in `/api/topology` and `X-Rail-Chain`.
+    pub id: String,
     pub store: Store,
     /// Never follows redirects: RAIL needs to see every hop.
     pub client: Client,
@@ -47,6 +49,7 @@ impl AppState {
     pub fn new(config: Config, store: Store) -> anyhow::Result<Self> {
         let client = crate::http_client()?;
         Ok(Self {
+            id: format!("{:016x}", rand::random::<u64>()),
             balancer: Balancer::new(config.strategy),
             config,
             store,
@@ -64,6 +67,7 @@ impl AppState {
 
     fn topology(&self) -> Topology {
         Topology {
+            id: self.id.clone(),
             instance: self.config.name.clone(),
             public_url: self.config.public_url.clone(),
             upstreams: self
@@ -80,13 +84,17 @@ impl AppState {
         let mut usable = Vec::new();
         let mut skipped = Vec::new();
         let me = &self.config.public_url;
+        let identity = topology::Identity {
+            id: &self.id,
+            url: me,
+        };
         for upstream in &self.config.upstreams {
             if let Upstream::Rail(base) = upstream {
                 let fetch = |u: Url| {
                     let client = self.client.clone();
                     async move { topology::fetch(&client, &u).await }
                 };
-                if let Some(path) = topology::find_cycle(me, base, fetch).await {
+                if let Some(path) = topology::find_cycle(identity, base, fetch).await {
                     let shown = std::iter::once(me)
                         .chain(&path)
                         .map(|u| u.as_str().trim_end_matches('/'))
@@ -193,10 +201,46 @@ pub struct ShortenResponse {
     pub link: Link,
 }
 
+/// Parse `X-Rail-Chain` and refuse requests that already passed through this instance or that
+/// would nest deeper than a browser could ever follow.
+fn extend_chain(state: &AppState, headers: &HeaderMap) -> Result<Vec<String>, AppError> {
+    let mut chain: Vec<String> = headers
+        .get(X_RAIL_CHAIN)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if chain.contains(&state.id) {
+        return Err(AppError::new(
+            StatusCode::LOOP_DETECTED,
+            format!(
+                "loop detected: {} is already in this shorten chain",
+                state.config.name
+            ),
+        ));
+    }
+    if chain.len() >= BROWSER_REDIRECT_LIMIT {
+        return Err(AppError::new(
+            StatusCode::LOOP_DETECTED,
+            format!(
+                "shorten chain is {} instances deep, past the browser redirect limit",
+                chain.len()
+            ),
+        ));
+    }
+    chain.push(state.id.clone());
+    Ok(chain)
+}
+
 async fn shorten(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(body): Json<ShortenBody>,
 ) -> Result<Json<ShortenResponse>, AppError> {
+    let chain = Arc::new(extend_chain(&state, &headers)?);
     let target = Url::parse(body.url.trim())
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, format!("invalid url: {e}")))?;
     if !matches!(target.scheme(), "http" | "https") {
@@ -216,8 +260,9 @@ async fn shorten(
     for upstream in upstreams {
         let client = state.client.clone();
         let target = target.clone();
+        let chain = Arc::clone(&chain);
         tasks.spawn(async move {
-            let minted = upstream.shorten(&client, &target).await;
+            let minted = upstream.shorten(&client, &target, &chain).await;
             (upstream, minted)
         });
     }
