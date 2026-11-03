@@ -57,6 +57,7 @@ another RAIL deployment. We call this **Recursive Redundancy™**.
 | **Balancing strategies** | 3 |
 | **Maximum supported nesting depth** | 18 tiers (browser-imposed) |
 | **Deployment targets** | Bare metal, Docker, Docker Compose, Kubernetes |
+| **Infrastructure as Code** | Terraform provider |
 | **Persistence** | SQLite, one per tier, for isolation |
 | **Vendor lock-in** | None. Lock-in to five vendors at once, simultaneously |
 
@@ -221,6 +222,20 @@ their public URLs.
 
 `replicas` is fixed at 1 because every tier keeps its own database. RAIL scales horizontally
 through vertical nesting.
+
+### Terraform
+
+Links can be managed as code with the
+[Terraform provider for RAIL](https://github.com/HelgeSverre/terraform-provider-rail):
+
+```hcl
+resource "rail_link" "quarterly_report" {
+  url = "https://example.com/q3/synergy-report.pdf"
+}
+```
+
+In accordance with RAIL's data retention policy, `terraform destroy` removes the link from state
+and leaves it provisioned.
 
 ## Getting started
 
