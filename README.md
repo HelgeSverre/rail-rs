@@ -53,7 +53,7 @@ another RAIL deployment. We call this **Recursive Redundancy™**.
 | | |
 | --- | --- |
 | **Category** | Link Resilience Platform (LRP) |
-| **Supported vendors** | is.gd, v.gd, TinyURL, da.gd, ulvis.net, RAIL |
+| **Supported vendors** | 13, including RAIL itself |
 | **Balancing strategies** | 3 |
 | **Maximum supported nesting depth** | 18 tiers (browser-imposed) |
 | **Deployment targets** | Bare metal, Docker, Docker Compose, Kubernetes |
@@ -106,11 +106,11 @@ flowchart TD
     mid2 --> leafb
     mid2 --> leafc[RAIL leaf-c]
     leafa --> isgd[(is.gd)]
-    leafa --> vgd[(v.gd)]
+    leafa --> spoo[(spoo.me)]
     leafb --> tiny2[(TinyURL)]
     leafb --> dagd[(da.gd)]
     leafc --> ulvis[(ulvis.net)]
-    leafc --> isgd2[(is.gd)]
+    leafc --> clck[(clck.ru)]
 ```
 
 Example resolution path, as observed in production:
@@ -161,25 +161,30 @@ docker run --rm -p 8080:8080 -v rail-data:/data ghcr.io/helgesverre/rail-rs:late
 ```
 
 Multi-architecture images (`linux/amd64`, `linux/arm64`) are published to GitHub Container Registry
-for every release.
+for every release. The container runs as uid 10001. Use a named volume as shown; a bind-mounted host
+directory must be writable by that uid (`chown 10001 ./data`).
 
 ### Docker Compose (reference architecture)
 
 ```sh
 git clone https://github.com/HelgeSverre/rail-rs && cd rail-rs
 docker compose up -d --build --wait
-open http://edge.rail.localhost:8080
+curl -s http://edge.rail.localhost:8080/api/tree
 ```
+
+Then open `http://edge.rail.localhost:8080` in Chrome or Firefox.
 
 Every tier is addressable as `<name>.rail.localhost:<port>`. Inside the Compose network the name
 resolves through a Docker DNS alias. On the host, `*.localhost` resolves to loopback per RFC 6761.
-A short URL is therefore valid both inside the cluster and in the operator's browser. RAIL ships
-its own resolver fallback for operating systems that have not read RFC 6761.
+A short URL is therefore valid both inside the cluster and in the operator's browser. Chrome,
+Firefox and curl implement this; Safari and the macOS system resolver do not, which is why RAIL
+ships its own resolver fallback for operating systems that have not read RFC 6761.
 
 ### Kubernetes (Helm)
 
 ```sh
-helm install rail oci://ghcr.io/helgesverre/charts/rail --version 0.1.0 -n rail --create-namespace
+helm install rail oci://ghcr.io/helgesverre/charts/rail --version 0.2.0 \
+  -n rail --create-namespace --wait
 helm test rail -n rail
 ```
 
@@ -190,10 +195,29 @@ references to unknown instances fail at render time.
 ```yaml
 instances:
   - name: leaf
-    upstreams: [is.gd, v.gd, tinyurl, da.gd]
+    upstreams: [is.gd, tinyurl, da.gd, spoo.me]
   - name: edge
     upstreams: [rail:leaf, ulvis]
 ```
+
+Without ingress, short links point at `*.svc.cluster.local` and only resolve inside the cluster
+(and from macOS on OrbStack). To issue links to the public, enable ingress. Every tier is then
+routed at `<instance>.<host>`, because a visitor's redirect chain passes through all of them:
+
+```yaml
+ingress:
+  enabled: true
+  className: nginx
+  host: rail.example.com          # edge.rail.example.com, mid-1.rail.example.com, ...
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+  tls:
+    enabled: true
+    secretName: rail-tls          # must cover *.rail.example.com
+```
+
+The hosts must also resolve from inside the cluster, since every tier verifies its mirrors through
+their public URLs.
 
 `replicas` is fixed at 1 because every tier keeps its own database. RAIL scales horizontally
 through vertical nesting.
@@ -201,7 +225,7 @@ through vertical nesting.
 ## Getting started
 
 ```sh
-rail serve --upstream is.gd,v.gd,tinyurl,da.gd,ulvis
+rail serve --upstream is.gd,tinyurl,da.gd,spoo.me,ulvis
 ```
 
 ```sh
@@ -219,15 +243,22 @@ curl -s -X POST localhost:8080/api/shorten \
   "failed": [],
   "id": "dGJqXvP",
   "target": "https://example.com/quarterly-synergy-report",
+  "created_at": 1793721600,
   "mirrors": [
-    { "upstream": "da.gd", "short_url": "https://da.gd/tnKciF", "healthy": true },
-    { "upstream": "is.gd", "short_url": "https://is.gd/Ys0TD4", "healthy": true },
-    { "upstream": "tinyurl", "short_url": "https://tinyurl.com/y7wd4n2g", "healthy": true },
-    { "upstream": "ulvis", "short_url": "https://ulvis.net/rMVR", "healthy": true },
-    { "upstream": "v.gd", "short_url": "https://v.gd/lpDTfW", "healthy": true }
+    {
+      "upstream": "da.gd",
+      "short_url": "https://da.gd/tnKciF",
+      "healthy": true,
+      "latency_ms": null,
+      "last_checked": null,
+      "last_error": null
+    }
   ]
 }
 ```
+
+The response lists one entry under `mirrors` per vendor; one is shown. `latency_ms`, `last_checked`
+and `last_error` are populated by the first verification sweep.
 
 `compression_ratio` is the short URL's length divided by the destination's. Values above `1.0`
 indicate that RAIL has made the URL longer. This is expected in multi-tier deployments and does not
@@ -248,22 +279,39 @@ Every option can be set by flag or environment variable.
 | `--name` | `RAIL_NAME` | `rail` | Tier name, reported in `X-Rail-Instance` |
 | `--listen` | `RAIL_LISTEN` | `0.0.0.0:8080` | Bind address |
 | `--public-url` | `RAIL_PUBLIC_URL` | `http://localhost:8080` | Base URL short links are issued under |
-| `--upstream` | `RAIL_UPSTREAMS` | `is.gd,v.gd,tinyurl,da.gd` | Comma-separated vendors (see below) |
+| `--upstream` | `RAIL_UPSTREAMS` | `is.gd,tinyurl,da.gd,spoo.me` | Comma-separated vendors (see below). Duplicates are rejected |
 | `--strategy` | `RAIL_STRATEGY` | `round-robin` | `round-robin`, `random`, `fastest` |
 | `--db` | `RAIL_DB` | `rail.db` | SQLite database path |
 | `--health-interval` | `RAIL_HEALTH_INTERVAL` | `300` | Seconds between verification sweeps |
+| `--allow-private-targets` | `RAIL_ALLOW_PRIVATE_TARGETS` | off | Accept destinations on loopback, private and link-local addresses |
+| `--tinyurl-token` | `RAIL_TINYURL_TOKEN` | | Token for the `tinyurl-api` vendor |
+| `--yourls-signature` | `RAIL_YOURLS_SIGNATURE` | | Signature token for `yourls+` vendors |
 
 ### Supported vendors
 
-| Vendor | Identifier |
-| --- | --- |
-| is.gd | `is.gd` |
-| v.gd | `v.gd` |
-| TinyURL | `tinyurl` |
-| da.gd | `da.gd` |
-| ulvis.net | `ulvis` |
-| RAIL | `rail+<base-url>`, e.g. `rail+http://leaf-a.rail.localhost:8081` |
-| None (Degraded Leaf) | `none` |
+| Vendor | Identifier | Credentials | Notes |
+| --- | --- | --- | --- |
+| is.gd | `is.gd` | | |
+| TinyURL | `tinyurl` | | Legacy keyless API |
+| TinyURL | `tinyurl-api` | `RAIL_TINYURL_TOKEN` | Official API, with a quota |
+| da.gd | `da.gd` | | |
+| spoo.me | `spoo.me` | | Anonymous limit of 20 links per minute |
+| ulvis.net | `ulvis` | | Slowest first hop observed (about 1.3 s) |
+| rlu.ru | `rlu.ru` | | Issues `http://` links |
+| clck.ru | `clck.ru` | | Adds a Yandex safe-browsing hop before the destination |
+| v.gd | `v.gd` | | Shows browsers an interstitial; see [Vendor interstitial policy](#vendor-interstitial-policy) |
+| httpbin.dev | `httpbin.dev` | | HTTP testing service; link is built locally (`/redirect-to?url=`) |
+| Postman Echo | `postman-echo` | | HTTP testing service; link is built locally (`/redirect-to?url=`) |
+| YOURLS (self-hosted) | `yourls+<base-url>` | `RAIL_YOURLS_SIGNATURE` | Your own instance |
+| RAIL | `rail+<base-url>`, e.g. `rail+http://leaf-a.rail.localhost:8081` | | |
+| None (Degraded Leaf) | `none` | | |
+
+Credentials are read from the environment and never appear in vendor identifiers, so
+`/api/topology`, `/api/tree` and the logs list vendors without exposing secrets.
+
+The following were evaluated and rejected. httpbin.org and httpbingo.org restrict `redirect-to` to
+example domains. Bitly free links display an advertisement first. Google, Facebook and LinkedIn
+redirectors present warning pages. goo.gl no longer issues links.
 
 ### Balancing strategies
 
@@ -278,7 +326,7 @@ Every option can be set by flag or environment variable.
 | Method | Route | Description |
 | --- | --- | --- |
 | `GET` | `/` | Self-service provisioning portal |
-| `POST` | `/api/shorten` | Provision a link. Body: `{"url": "…"}` |
+| `POST` | `/api/shorten` | Provision a link. Body: `{"url": "…"}`. Repeat requests for a destination return the existing link |
 | `GET` | `/{id}` | Resolve a link. Responds `302` with `X-Rail-Instance` and `X-Rail-Upstream` headers |
 | `GET` | `/{id}/info` | Mirror inventory with health, latency and last error |
 | `GET` | `/{id}/trace` | Full resolution path from this tier, with remaining redirect budget |
@@ -294,8 +342,13 @@ Every option can be set by flag or environment variable.
 
 Chromium and Firefox abort after 20 consecutive redirects (`ERR_TOO_MANY_REDIRECTS`). Each RAIL tier
 consumes one redirect, and the terminal vendor consumes at least one more. The supported maximum is
-therefore 18 nested tiers. `/{id}/trace` reports the remaining `headroom` for capacity planning. The
-test suite provisions a 21-tier deployment and confirms that it exceeds the budget.
+therefore 18 nested tiers. `/{id}/trace` reports the remaining `headroom` for capacity planning.
+
+RAIL enforces the budget at provisioning time. Each nested `/api/shorten` call carries an
+`X-Rail-Chain` header listing the tiers it has passed through, and a tier refuses (`508 Loop
+Detected`) once the chain reaches 20. The tier above it then serves its link in Degraded Mode, so the
+resulting link stays within the budget. The test suite provisions a 21-tier deployment and confirms
+that the issued link resolves in exactly 20 redirects.
 
 ### Cycle mitigation
 
@@ -303,6 +356,19 @@ If tier A lists tier B as an upstream and B lists A, resolution would loop until
 Before provisioning through a RAIL upstream, a tier walks the upstream graph through
 `/api/topology` and excludes any upstream from which it can reach itself. The exclusion is reported
 in the `failed` array with the full cycle path.
+
+Tiers are identified by a random per-process id published in `/api/topology`, not by URL. A tier
+reached as `localhost` in one configuration and as `127.0.0.1` in another is still recognized. Should
+detection miss a cycle regardless, the `X-Rail-Chain` header ends it: a tier that finds its own id in
+the chain refuses the request with `508 Loop Detected`.
+
+### Destination policy
+
+Every destination is fetched by `/{id}/trace` and resolved by every verification sweep. RAIL
+therefore refuses destinations on loopback, private, link-local and other non-public addresses,
+including `*.localhost` names and hostnames that resolve to such addresses, to avoid becoming a
+server-side request forgery probe. Intranet deployments can opt out with `--allow-private-targets`.
+Verification sweeps stop at the destination without requesting it.
 
 ### Vendor interstitial policy
 
@@ -314,7 +380,8 @@ mirrors are correctly classified as unhealthy for human traffic and evicted.
 
 Every tier verifies its own mirrors independently, so the verification load on each vendor grows
 with the number of nested tiers. The default sweep interval of 300 seconds is calibrated to keep
-RAIL on good terms with the public URL shortening ecosystem.
+RAIL on good terms with the public URL shortening ecosystem. A sweep verifies at most 8 mirrors
+concurrently, and each verification is limited to 60 seconds.
 
 ### Service level objectives
 
@@ -351,15 +418,15 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-The integration suite in `tests/nesting.rs` runs real tiers on loopback with Degraded Leaves, so it
-never contacts third-party vendors. CI additionally verifies:
+The integration suites in `tests/` run real tiers and misbehaving vendors on loopback, so they never
+contact third-party vendors. CI additionally verifies:
 
 | Job | Scope |
 | --- | --- |
 | Rust | fmt, clippy and tests on Linux and macOS |
-| Helm chart | `helm lint --strict`, kubeconform schema validation, topology validation |
+| Helm chart | `helm lint --strict`, kubeconform schema validation with and without ingress, topology validation |
 | Pyramid (docker compose) | six-tier offline deployment, traced end to end |
-| Pyramid (kind) | six-tier Kubernetes deployment, verified with `helm test` |
+| Pyramid (kind) | six-tier offline Kubernetes deployment, verified with `helm test` |
 
 Releases are cut by pushing a `v*` tag, which publishes binaries, a multi-architecture container
 image and the Helm chart.
