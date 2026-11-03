@@ -3,6 +3,7 @@
 use std::time::Instant;
 
 use anyhow::Result;
+use percent_encoding::percent_decode_str;
 use reqwest::{Client, header::LOCATION};
 use serde::Serialize;
 use url::Url;
@@ -28,6 +29,9 @@ pub struct Trace {
     /// Redirects left before a browser bails with ERR_TOO_MANY_REDIRECTS. Negative means it already did.
     pub headroom: i64,
     pub gave_up: bool,
+    /// The chain reached the URL we were looking for, so the trace stopped without fetching it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub reached: bool,
 }
 
 impl Trace {
@@ -40,7 +44,7 @@ impl Trace {
         Url::parse(target).is_ok_and(|target| {
             self.hops
                 .iter()
-                .any(|hop| Url::parse(&hop.url).is_ok_and(|u| u == target))
+                .any(|hop| Url::parse(&hop.url).is_ok_and(|u| same_resource(&u, &target)))
         })
     }
 
@@ -50,14 +54,48 @@ impl Trace {
     }
 }
 
+/// Whether two URLs name the same resource as far as a redirect chain is concerned: fragments
+/// never reach the server, and `%7e` vs `%7E` vs `~` is a vendor's re-encoding, not a new page.
+pub fn same_resource(a: &Url, b: &Url) -> bool {
+    fn key(u: &Url) -> (String, Option<String>, Option<u16>, String, Option<String>) {
+        let decode = |s: &str| percent_decode_str(s).decode_utf8_lossy().into_owned();
+        (
+            u.scheme().to_owned(),
+            u.host_str().map(str::to_ascii_lowercase),
+            u.port_or_known_default(),
+            decode(u.path()),
+            u.query().map(decode),
+        )
+    }
+    key(a) == key(b)
+}
+
 /// Follow redirects from `start` until something answers without one, or until one past the
 /// browser limit. `client` must not follow redirects itself.
 pub async fn trace(client: &Client, start: &str) -> Result<Trace> {
+    trace_until(client, start, None).await
+}
+
+/// Like [`trace`], but stop as soon as the chain reaches `stop`, without requesting it. The
+/// health checker uses this so it never fetches (or depends on the behavior of) the target.
+pub async fn trace_until(client: &Client, start: &str, stop: Option<&Url>) -> Result<Trace> {
     let mut current = Url::parse(start)?;
     let mut hops = Vec::new();
     let mut redirects = 0;
+    let mut reached = false;
 
     loop {
+        if redirects > 0 && stop.is_some_and(|stop| same_resource(&current, stop)) {
+            hops.push(Hop {
+                url: current.into(),
+                status: None,
+                latency_ms: 0,
+                instance: None,
+                error: None,
+            });
+            reached = true;
+            break;
+        }
         let started = Instant::now();
         let response = client.get(current.clone()).send().await;
         let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -123,5 +161,6 @@ pub async fn trace(client: &Client, start: &str) -> Result<Trace> {
         redirects,
         headroom: BROWSER_REDIRECT_LIMIT as i64 - redirects as i64,
         gave_up,
+        reached,
     })
 }

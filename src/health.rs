@@ -2,16 +2,20 @@
 //! pointing at the target. Each nested layer does this independently, so a deep enough
 //! tower politely DDoSes is.gd.
 
-use anyhow::Result;
-use tokio::time::{MissedTickBehavior, interval};
+use std::time::Duration;
+
+use anyhow::{Result, anyhow};
+use futures_util::{StreamExt, stream};
+use tokio::time::{MissedTickBehavior, interval, timeout};
 use tracing::{info, warn};
 
 use crate::{
     now,
     server::AppState,
     store::{CheckOutcome, Mirror},
-    trace::trace,
+    trace::trace_until,
 };
+use url::Url;
 
 pub async fn run(state: std::sync::Arc<AppState>) {
     let mut tick = interval(state.config.health_interval);
@@ -24,40 +28,73 @@ pub async fn run(state: std::sync::Arc<AppState>) {
     }
 }
 
+/// How many mirrors are traced at once during a sweep.
+const CONCURRENCY: usize = 8;
+/// Upper bound on one mirror's trace: 21 hops at the client's 10 s timeout would be minutes.
+const TRACE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Check every mirror of every link once. One mirror's failure (or a database error recording
+/// it) never stops the rest of the sweep.
 pub async fn check_all(state: &AppState) -> Result<()> {
-    for link in state.store.all()? {
-        for mirror in &link.mirrors {
-            let outcome = check(state, mirror, &link.target).await;
+    let links = state.store.all()?;
+    // Collected rather than lazy: a borrowed iterator chain in a spawned future trips the
+    // compiler's `Send` inference.
+    let checks: Vec<(&str, &str, &Mirror)> = links
+        .iter()
+        .flat_map(|link| {
+            link.mirrors
+                .iter()
+                .map(move |mirror| (link.id.as_str(), link.target.as_str(), mirror))
+        })
+        .collect();
+    stream::iter(checks)
+        .for_each_concurrent(CONCURRENCY, |(link_id, target, mirror)| async move {
+            let outcome = check(state, mirror, target).await;
             match (mirror.healthy, outcome.healthy) {
                 (true, false) => warn!(
-                    link = link.id,
+                    link = link_id,
                     upstream = mirror.upstream,
                     "mirror evicted: {}",
                     outcome.error.as_deref().unwrap_or("unknown")
                 ),
                 (false, true) => info!(
-                    link = link.id,
+                    link = link_id,
                     upstream = mirror.upstream,
                     "mirror recovered"
                 ),
                 _ => {}
             }
-            state
+            if let Err(e) = state
                 .store
-                .record_check(&link.id, &mirror.upstream, &outcome)?;
-        }
-    }
+                .record_check(link_id, &mirror.upstream, &outcome)
+            {
+                warn!(
+                    link = link_id,
+                    upstream = mirror.upstream,
+                    "could not record check: {e:#}"
+                );
+            }
+        })
+        .await;
     Ok(())
 }
 
 async fn check(state: &AppState, mirror: &Mirror, target: &str) -> CheckOutcome {
-    let (healthy, latency_ms, error) = match trace(&state.client, &mirror.short_url).await {
+    let stop = Url::parse(target).ok();
+    let traced = timeout(
+        TRACE_TIMEOUT,
+        trace_until(&state.client, &mirror.short_url, stop.as_ref()),
+    )
+    .await
+    .unwrap_or_else(|_| Err(anyhow!("trace took longer than {TRACE_TIMEOUT:?}")));
+    let (healthy, latency_ms, error) = match traced {
+        // Reaching the target is all a mirror has to do; what the target does next is not its fault.
+        Ok(t) if t.reached || t.visits(target) => (true, t.first_hop_ms(), None),
         Ok(t) if t.gave_up => (
             false,
             t.first_hop_ms(),
             Some("redirect chain exceeds the browser limit".into()),
         ),
-        Ok(t) if t.visits(target) => (true, t.first_hop_ms(), None),
         Ok(t) if t.redirects == 0 => (
             false,
             t.first_hop_ms(),
