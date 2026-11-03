@@ -16,7 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && useradd --system --uid 10001 rail && mkdir /data && chown rail /data
 COPY --from=build /rail /usr/local/bin/rail
 USER rail
-ENV RAIL_DB=/data/rail.db
+# The HEALTHCHECK reads the port from RAIL_LISTEN, so it must always be set.
+ENV RAIL_DB=/data/rail.db \
+    RAIL_LISTEN=0.0.0.0:8080
 VOLUME /data
 HEALTHCHECK --interval=10s --timeout=3s CMD curl -fsS "http://127.0.0.1:${RAIL_LISTEN##*:}/healthz" || exit 1
 ENTRYPOINT ["rail"]
