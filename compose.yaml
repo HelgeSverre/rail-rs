@@ -5,7 +5,7 @@
 #           mid-1 :8091  mid-2 :8092  tinyurl
 #           /     \      /     \
 #   leaf-a :8081  leaf-b :8082  leaf-c :8083
-#   is.gd v.gd    tinyurl da.gd  ulvis is.gd
+#  is.gd spoo.me  tinyurl da.gd  ulvis clck.ru
 #
 # Every instance is "<name>.rail.localhost:<port>". Inside the network that resolves through a
 # Docker DNS alias; on the host, *.localhost resolves to loopback and the port is published. The
@@ -27,7 +27,7 @@ services:
       RAIL_NAME: leaf-a
       RAIL_LISTEN: 0.0.0.0:8081
       RAIL_PUBLIC_URL: http://leaf-a.rail.localhost:8081
-      RAIL_UPSTREAMS: is.gd,v.gd
+      RAIL_UPSTREAMS: is.gd,spoo.me
     ports: ["8081:8081"]
     networks: { default: { aliases: [leaf-a.rail.localhost] } }
 
@@ -50,7 +50,7 @@ services:
       RAIL_NAME: leaf-c
       RAIL_LISTEN: 0.0.0.0:8083
       RAIL_PUBLIC_URL: http://leaf-c.rail.localhost:8083
-      RAIL_UPSTREAMS: ulvis,is.gd
+      RAIL_UPSTREAMS: ulvis,clck.ru
       RAIL_STRATEGY: random
     ports: ["8083:8083"]
     networks: { default: { aliases: [leaf-c.rail.localhost] } }

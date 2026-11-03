@@ -20,17 +20,17 @@ resources:
   requests: { cpu: 5m, memory: 16Mi }
   limits: { memory: 64Mi }
 
-# The topology. Upstreams are shortener names (is.gd, v.gd, tinyurl, da.gd, ulvis) or
+# The topology. Upstreams are shortener names (is.gd, tinyurl, da.gd, spoo.me, ...; see the README) or
 # `rail:<instance>` to reference another instance in this release. Cycles are allowed to
 # deploy, and RAIL refuses them at runtime, as is tradition.
 instances:
   - name: leaf-a
-    upstreams: [is.gd, v.gd]
+    upstreams: [is.gd, spoo.me]
   - name: leaf-b
     upstreams: [tinyurl, da.gd]
     strategy: fastest
   - name: leaf-c
-    upstreams: [ulvis, is.gd]
+    upstreams: [ulvis, clck.ru]
     strategy: random
   - name: mid-1
     upstreams: [rail:leaf-a, rail:leaf-b]

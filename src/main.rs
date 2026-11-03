@@ -34,12 +34,12 @@ struct ServeArgs {
     /// Base URL this instance is reachable at. Short URLs are minted under it.
     #[arg(long, env = "RAIL_PUBLIC_URL", default_value = "http://localhost:8080")]
     public_url: Url,
-    /// Comma-separated: is.gd, v.gd, tinyurl, da.gd, ulvis, rail+<url>. "none" for a degraded leaf.
+    /// Comma-separated upstreams (see the README for the list), rail+<url>, yourls+<url>, or "none".
     #[arg(
         long = "upstream",
         env = "RAIL_UPSTREAMS",
         value_delimiter = ',',
-        default_value = "is.gd,v.gd,tinyurl,da.gd"
+        default_value = "is.gd,tinyurl,da.gd,spoo.me"
     )]
     upstreams: Vec<String>,
     #[arg(long, env = "RAIL_STRATEGY", value_enum, default_value_t)]
