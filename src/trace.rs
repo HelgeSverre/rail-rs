@@ -77,12 +77,13 @@ pub async fn trace(client: &Client, start: &str) -> Result<Trace> {
         };
 
         let status = response.status();
+        // Lossy, not `to_str`: servers do send raw UTF-8 in Location (`/café`), browsers follow
+        // it, and `Url::join` percent-encodes it the same way they do.
         let header = |name: &str| {
             response
                 .headers()
                 .get(name)
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_owned)
+                .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
         };
         let location = status
             .is_redirection()
@@ -101,7 +102,19 @@ pub async fn trace(client: &Client, start: &str) -> Result<Trace> {
         if redirects > BROWSER_REDIRECT_LIMIT {
             break;
         }
-        current = current.join(&location)?;
+        match current.join(&location) {
+            Ok(next) => current = next,
+            Err(e) => {
+                hops.push(Hop {
+                    url: location,
+                    status: None,
+                    latency_ms: 0,
+                    instance: None,
+                    error: Some(format!("unparseable Location: {e}")),
+                });
+                break;
+            }
+        }
     }
 
     let gave_up = redirects > BROWSER_REDIRECT_LIMIT;
