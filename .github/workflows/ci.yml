@@ -24,7 +24,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -37,8 +37,8 @@ jobs:
     name: Helm chart
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
       - run: helm lint --strict charts/rail
       - name: Validate rendered manifests
         run: |
@@ -56,7 +56,7 @@ jobs:
     name: Pyramid (docker compose, offline)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Start the pyramid
         run: docker compose -f compose.yaml -f compose.ci.yaml up -d --build --wait
       - name: Shorten through six instances and trace it
@@ -81,8 +81,8 @@ jobs:
     name: Pyramid (kind + helm test)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
       - uses: helm/kind-action@v1
         with:
           cluster_name: rail
