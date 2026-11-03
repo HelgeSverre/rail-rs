@@ -54,6 +54,8 @@ spec:
         runAsNonRoot: true
         runAsUser: 10001
         fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: rail
           image: "{{ $root.Values.image.repository }}:{{ $root.Values.image.tag | default $root.Chart.AppVersion }}"
@@ -65,7 +67,7 @@ spec:
             - name: RAIL_LISTEN
               value: "0.0.0.0:{{ $root.Values.port }}"
             - name: RAIL_PUBLIC_URL
-              value: {{ include "rail.instanceUrl" $ctx | quote }}
+              value: {{ include "rail.publicUrl" $ctx | quote }}
             - name: RAIL_UPSTREAMS
               value: {{ include "rail.upstreams" (dict "root" $root "instance" $instance) | quote }}
             - name: RAIL_STRATEGY

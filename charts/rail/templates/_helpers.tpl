@@ -3,13 +3,22 @@
 {{- printf "%s-%s" .root.Release.Name .name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/* In-cluster base URL of an instance. */}}
-{{- define "rail.instanceUrl" -}}
-{{- $root := .root -}}
-{{- if and $root.Values.ingress.enabled (eq $root.Values.ingress.instance .name) -}}
-{{- printf "%s://%s" (ternary "https" "http" $root.Values.ingress.tls) $root.Values.ingress.host -}}
+{{/* In-cluster base URL of an instance: what other instances and the test pod call. */}}
+{{- define "rail.serviceUrl" -}}
+{{- printf "http://%s.%s.svc.%s:%v" (include "rail.instanceName" .) .root.Release.Namespace .root.Values.clusterDomain .root.Values.port -}}
+{{- end -}}
+
+{{/*
+Public base URL of an instance: what its short links are minted under, so what browsers follow.
+With ingress enabled every instance gets <instance>.<host>, because a redirect chain passes
+through every tier, not only the top one.
+*/}}
+{{- define "rail.publicUrl" -}}
+{{- $ingress := .root.Values.ingress -}}
+{{- if $ingress.enabled -}}
+{{- printf "%s://%s.%s" (ternary "https" "http" $ingress.tls.enabled) .name $ingress.host -}}
 {{- else -}}
-{{- printf "http://%s.%s.svc.%s:%v" (include "rail.instanceName" .) $root.Release.Namespace $root.Values.clusterDomain $root.Values.port -}}
+{{- include "rail.serviceUrl" . -}}
 {{- end -}}
 {{- end -}}
 
@@ -26,7 +35,7 @@
 {{- if not (has $ref $known) -}}
 {{- fail (printf "instance %q lists upstream rail:%s, but no instance is named %q" $self $ref $ref) -}}
 {{- end -}}
-{{- $out = append $out (printf "rail+%s" (include "rail.instanceUrl" (dict "root" $root "name" $ref))) -}}
+{{- $out = append $out (printf "rail+%s" (include "rail.serviceUrl" (dict "root" $root "name" $ref))) -}}
 {{- else -}}
 {{- $out = append $out . -}}
 {{- end -}}

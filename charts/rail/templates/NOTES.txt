@@ -1,12 +1,15 @@
 RAIL is deployed: {{ len .Values.instances }} URL shorteners balancing each other in {{ .Release.Namespace }}.
 
 {{- $top := last .Values.instances }}
-{{- $url := include "rail.instanceUrl" (dict "root" . "name" $top.name) }}
+{{- $url := include "rail.publicUrl" (dict "root" . "name" $top.name) }}
 
 Top of the pyramid ({{ $top.name }}): {{ $url }}
 
   curl -s -X POST {{ $url }}/api/shorten -H 'content-type: application/json' -d '{"url":"https://example.com"}'
   curl -s {{ $url }}/api/tree
   helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+{{- if not .Values.ingress.enabled }}
 
-OrbStack resolves *.svc.cluster.local from macOS, so these URLs work from your browser too.
+Short links point at *.svc.cluster.local, which only resolves inside the cluster (and from
+macOS on OrbStack). Enable ingress to hand links to anyone else.
+{{- end }}

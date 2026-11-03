@@ -1,24 +1,43 @@
 {{- if .Values.ingress.enabled }}
-{{- $ctx := dict "root" . "name" .Values.ingress.instance }}
+{{- $root := . }}
+{{- $ingress := .Values.ingress }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "rail.instanceName" $ctx }}
+  name: {{ .Release.Name }}-rail
   labels:
-    {{- include "rail.labels" $ctx | nindent 4 }}
+    app.kubernetes.io/name: rail
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  {{- with $ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
-  {{- with .Values.ingress.className }}
+  {{- with $ingress.className }}
   ingressClassName: {{ . }}
   {{- end }}
+  {{- if $ingress.tls.enabled }}
+  tls:
+    - hosts:
+        {{- range .Values.instances }}
+        - {{ printf "%s.%s" .name $ingress.host | quote }}
+        {{- end }}
+      {{- with $ingress.tls.secretName }}
+      secretName: {{ . }}
+      {{- end }}
+  {{- end }}
   rules:
-    - host: {{ .Values.ingress.host | quote }}
+    {{- range .Values.instances }}
+    - host: {{ printf "%s.%s" .name $ingress.host | quote }}
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ include "rail.instanceName" $ctx }}
+                name: {{ include "rail.instanceName" (dict "root" $root "name" .name) }}
                 port:
                   name: http
+    {{- end }}
 {{- end }}

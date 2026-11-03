@@ -39,10 +39,16 @@ instances:
   - name: edge
     upstreams: [rail:mid-1, rail:mid-2, tinyurl]
 
+# Routes every instance at <instance>.<host>. Every tier needs a public name: a visitor's
+# redirect chain passes through all of them. The hosts must also resolve from inside the
+# cluster, because each instance health-checks its mirrors through their public URLs.
 ingress:
   enabled: false
   className: ""
-  # Exposes the instance named here. Its public URL becomes http(s)://<host>.
-  instance: edge
-  host: rail.localhost
-  tls: false
+  host: rail.example.com
+  annotations: {}
+  tls:
+    enabled: false
+    # Certificate covering every <instance>.<host> (a wildcard works). Leave empty to let
+    # the ingress controller or an annotation-driven issuer (cert-manager) provide it.
+    secretName: ""

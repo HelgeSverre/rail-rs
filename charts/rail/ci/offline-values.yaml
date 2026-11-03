@@ -1,0 +1,14 @@
+# CI values: every leaf runs degraded, so `helm test` doesn't depend on third-party shorteners.
+instances:
+  - name: leaf-a
+    upstreams: [none]
+  - name: leaf-b
+    upstreams: [none]
+  - name: leaf-c
+    upstreams: [none]
+  - name: mid-1
+    upstreams: [rail:leaf-a, rail:leaf-b]
+  - name: mid-2
+    upstreams: [rail:leaf-b, rail:leaf-c]
+  - name: edge
+    upstreams: [rail:mid-1, rail:mid-2]

@@ -11,14 +11,28 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: trace
       image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
       imagePullPolicy: {{ .Values.image.pullPolicy }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: { drop: [ALL] }
       command: [sh, -ec]
       args:
         - |
-          base={{ include "rail.instanceUrl" $ctx | quote }}
+          base={{ include "rail.serviceUrl" $ctx | quote }}
+          i=0
+          until curl -fsS "$base/healthz" > /dev/null; do
+            i=$((i + 1)); [ "$i" -lt 60 ] || { echo "$base never became ready"; exit 1; }
+            sleep 2
+          done
           id=$(curl -fsS -X POST "$base/api/shorten" -H 'content-type: application/json' \
             -d '{"url":"https://example.com/helm-test"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
           test -n "$id"
