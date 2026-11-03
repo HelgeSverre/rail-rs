@@ -23,7 +23,12 @@ use anyhow::Result;
 use tokio::net::TcpListener;
 use url::Url;
 
-use crate::{balancer::Strategy, server::AppState, store::Store, upstream::Upstream};
+use crate::{
+    balancer::Strategy,
+    server::AppState,
+    store::Store,
+    upstream::{Credentials, Upstream},
+};
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -36,6 +41,8 @@ pub struct Config {
     /// Accept targets on loopback, private and link-local addresses. Off by default: every
     /// target is fetched by the health checker, so this would make RAIL an SSRF probe.
     pub allow_private_targets: bool,
+    /// Keys for keyed upstreams (tinyurl-api, yourls+).
+    pub credentials: Credentials,
 }
 
 /// Serve RAIL on `listener` until the process dies, with the health checker in the background.

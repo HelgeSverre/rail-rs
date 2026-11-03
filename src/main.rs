@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use rail::{Config, balancer::Strategy, store::Store, trace::trace};
+use rail::{Config, balancer::Strategy, store::Store, trace::trace, upstream::Credentials};
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -19,7 +19,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Run a RAIL instance.
-    Serve(ServeArgs),
+    Serve(Box<ServeArgs>),
     /// Follow a short URL hop by hop and report how close it is to the browser redirect limit.
     Trace { url: String },
 }
@@ -53,6 +53,12 @@ struct ServeArgs {
     /// Accept targets on loopback, private and link-local addresses (intranet deployments).
     #[arg(long, env = "RAIL_ALLOW_PRIVATE_TARGETS")]
     allow_private_targets: bool,
+    /// API token for the tinyurl-api upstream.
+    #[arg(long, env = "RAIL_TINYURL_TOKEN", hide_env_values = true)]
+    tinyurl_token: Option<String>,
+    /// Secret signature token for yourls+<url> upstreams.
+    #[arg(long, env = "RAIL_YOURLS_SIGNATURE", hide_env_values = true)]
+    yourls_signature: Option<String>,
 }
 
 #[tokio::main]
@@ -64,7 +70,7 @@ async fn main() -> Result<()> {
         .init();
 
     match Cli::parse().command {
-        Command::Serve(args) => serve(args).await,
+        Command::Serve(args) => serve(*args).await,
         Command::Trace { url } => {
             let client = rail::http_client()?;
             let t = trace(&client, &url).await?;
@@ -98,7 +104,12 @@ async fn main() -> Result<()> {
 }
 
 async fn serve(args: ServeArgs) -> Result<()> {
-    let upstreams = rail::upstream::parse_all(args.upstreams.iter().map(String::as_str))?;
+    let credentials = Credentials {
+        tinyurl_token: args.tinyurl_token.filter(|t| !t.is_empty()),
+        yourls_signature: args.yourls_signature.filter(|s| !s.is_empty()),
+    };
+    let upstreams =
+        rail::upstream::parse_all(args.upstreams.iter().map(String::as_str), &credentials)?;
     let config = Config {
         name: args.name,
         public_url: args.public_url,
@@ -106,6 +117,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         strategy: args.strategy,
         health_interval: Duration::from_secs(args.health_interval.max(1)),
         allow_private_targets: args.allow_private_targets,
+        credentials,
     };
     let store = Store::open(&args.db)?;
     let listener = TcpListener::bind(&args.listen)

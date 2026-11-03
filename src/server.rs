@@ -34,7 +34,7 @@ use crate::{
     target,
     topology::{self, Topology, TreeNode},
     trace::{BROWSER_REDIRECT_LIMIT, Trace, trace},
-    upstream::{Upstream, X_RAIL_CHAIN},
+    upstream::{ShortenContext, Upstream, X_RAIL_CHAIN},
 };
 
 pub const X_RAIL_INSTANCE: HeaderName = HeaderName::from_static("x-rail-instance");
@@ -280,7 +280,11 @@ async fn shorten(
     headers: HeaderMap,
     Json(body): Json<ShortenBody>,
 ) -> Result<Json<ShortenResponse>, AppError> {
-    let chain = Arc::new(extend_chain(&state, &headers)?);
+    let ctx = ShortenContext {
+        client: state.client.clone(),
+        chain: Arc::new(extend_chain(&state, &headers)?),
+        credentials: Arc::new(state.config.credentials.clone()),
+    };
     let target = target::validate(&body.url, state.config.allow_private_targets)
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, e.to_string()))?;
@@ -294,11 +298,10 @@ async fn shorten(
     let (upstreams, mut failed) = state.usable_upstreams().await;
     let mut tasks = JoinSet::new();
     for upstream in upstreams {
-        let client = state.client.clone();
+        let ctx = ctx.clone();
         let target = target.clone();
-        let chain = Arc::clone(&chain);
         tasks.spawn(async move {
-            let minted = upstream.shorten(&client, &target, &chain).await;
+            let minted = upstream.shorten(&ctx, &target).await;
             (upstream, minted)
         });
     }
@@ -444,6 +447,7 @@ mod tests {
                 strategy: Strategy::RoundRobin,
                 health_interval: Duration::from_secs(1),
                 allow_private_targets: false,
+                credentials: Default::default(),
             },
             Store::open(":memory:")?,
         )?;

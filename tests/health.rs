@@ -67,6 +67,7 @@ async fn sweep_classifies_mirrors_without_fetching_the_target() -> Result<()> {
             strategy: Strategy::RoundRobin,
             health_interval: Duration::from_secs(3600),
             allow_private_targets: true,
+            credentials: Default::default(),
         },
         Store::open(":memory:")?,
     )?;
