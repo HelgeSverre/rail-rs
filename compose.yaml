@@ -1,0 +1,92 @@
+# The Pyramid: six RAIL instances balancing each other.
+#
+#                     edge :8080
+#                 /       |       \
+#           mid-1 :8091  mid-2 :8092  tinyurl
+#           /     \      /     \
+#   leaf-a :8081  leaf-b :8082  leaf-c :8083
+#   is.gd v.gd    tinyurl da.gd  ulvis is.gd
+#
+# Every instance is "<name>.rail.localhost:<port>". Inside the network that resolves through a
+# Docker DNS alias; on the host, *.localhost resolves to loopback and the port is published. The
+# same short URL therefore works for containers and for your browser.
+
+x-rail: &rail
+  build: .
+  image: rail-rs:latest
+  restart: unless-stopped
+  environment: &env
+    RAIL_HEALTH_INTERVAL: "60"
+    RAIL_STRATEGY: round-robin
+
+services:
+  leaf-a:
+    <<: *rail
+    environment:
+      <<: *env
+      RAIL_NAME: leaf-a
+      RAIL_LISTEN: 0.0.0.0:8081
+      RAIL_PUBLIC_URL: http://leaf-a.rail.localhost:8081
+      RAIL_UPSTREAMS: is.gd,v.gd
+    ports: ["8081:8081"]
+    networks: { default: { aliases: [leaf-a.rail.localhost] } }
+
+  leaf-b:
+    <<: *rail
+    environment:
+      <<: *env
+      RAIL_NAME: leaf-b
+      RAIL_LISTEN: 0.0.0.0:8082
+      RAIL_PUBLIC_URL: http://leaf-b.rail.localhost:8082
+      RAIL_UPSTREAMS: tinyurl,da.gd
+      RAIL_STRATEGY: fastest
+    ports: ["8082:8082"]
+    networks: { default: { aliases: [leaf-b.rail.localhost] } }
+
+  leaf-c:
+    <<: *rail
+    environment:
+      <<: *env
+      RAIL_NAME: leaf-c
+      RAIL_LISTEN: 0.0.0.0:8083
+      RAIL_PUBLIC_URL: http://leaf-c.rail.localhost:8083
+      RAIL_UPSTREAMS: ulvis,is.gd
+      RAIL_STRATEGY: random
+    ports: ["8083:8083"]
+    networks: { default: { aliases: [leaf-c.rail.localhost] } }
+
+  mid-1:
+    <<: *rail
+    environment:
+      <<: *env
+      RAIL_NAME: mid-1
+      RAIL_LISTEN: 0.0.0.0:8091
+      RAIL_PUBLIC_URL: http://mid-1.rail.localhost:8091
+      RAIL_UPSTREAMS: rail+http://leaf-a.rail.localhost:8081,rail+http://leaf-b.rail.localhost:8082
+    ports: ["8091:8091"]
+    networks: { default: { aliases: [mid-1.rail.localhost] } }
+    depends_on: { leaf-a: { condition: service_healthy }, leaf-b: { condition: service_healthy } }
+
+  mid-2:
+    <<: *rail
+    environment:
+      <<: *env
+      RAIL_NAME: mid-2
+      RAIL_LISTEN: 0.0.0.0:8092
+      RAIL_PUBLIC_URL: http://mid-2.rail.localhost:8092
+      RAIL_UPSTREAMS: rail+http://leaf-b.rail.localhost:8082,rail+http://leaf-c.rail.localhost:8083
+    ports: ["8092:8092"]
+    networks: { default: { aliases: [mid-2.rail.localhost] } }
+    depends_on: { leaf-b: { condition: service_healthy }, leaf-c: { condition: service_healthy } }
+
+  edge:
+    <<: *rail
+    environment:
+      <<: *env
+      RAIL_NAME: edge
+      RAIL_LISTEN: 0.0.0.0:8080
+      RAIL_PUBLIC_URL: http://edge.rail.localhost:8080
+      RAIL_UPSTREAMS: rail+http://mid-1.rail.localhost:8091,rail+http://mid-2.rail.localhost:8092,tinyurl
+    ports: ["8080:8080"]
+    networks: { default: { aliases: [edge.rail.localhost] } }
+    depends_on: { mid-1: { condition: service_healthy }, mid-2: { condition: service_healthy } }

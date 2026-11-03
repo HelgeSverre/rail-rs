@@ -1,0 +1,10 @@
+# Offline overlay for CI: every leaf runs degraded (no third-party shorteners), so the pyramid can
+# be verified end to end without depending on is.gd's mood.
+#   docker compose -f compose.yaml -f compose.ci.yaml up -d --build --wait
+services:
+  leaf-a: { environment: { RAIL_UPSTREAMS: none } }
+  leaf-b: { environment: { RAIL_UPSTREAMS: none } }
+  leaf-c: { environment: { RAIL_UPSTREAMS: none } }
+  edge:
+    environment:
+      RAIL_UPSTREAMS: rail+http://mid-1.rail.localhost:8091,rail+http://mid-2.rail.localhost:8092
