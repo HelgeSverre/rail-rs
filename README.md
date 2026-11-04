@@ -220,6 +220,21 @@ ingress:
 The hosts must also resolve from inside the cluster, since every tier verifies its mirrors through
 their public URLs.
 
+Credentials for [licensed vendors](#licensed-vendors) are loaded from an existing Secret, for the
+whole release or per instance:
+
+```sh
+kubectl -n rail create secret generic rail-vendors \
+  --from-literal=RAIL_XGD_KEY=... --from-literal=RAIL_CUTTLY_KEY=...
+```
+
+```yaml
+credentialsSecret: rail-vendors
+instances:
+  - name: leaf
+    upstreams: [x.gd, cutt.ly, is.gd]
+```
+
 `replicas` is fixed at 1 because every tier keeps its own database. RAIL scales horizontally
 through vertical nesting.
 
@@ -301,6 +316,7 @@ Every option can be set by flag or environment variable.
 | `--allow-private-targets` | `RAIL_ALLOW_PRIVATE_TARGETS` | off | Accept destinations on loopback, private and link-local addresses |
 | `--tinyurl-token` | `RAIL_TINYURL_TOKEN` | | Token for the `tinyurl-api` vendor |
 | `--yourls-signature` | `RAIL_YOURLS_SIGNATURE` | | Signature token for `yourls+` vendors |
+| | `RAIL_*_KEY`, `RAIL_*_TOKEN` | | Credentials for licensed vendors; see [Licensed vendors](#licensed-vendors) |
 
 ### Supported vendors
 
@@ -318,15 +334,48 @@ Every option can be set by flag or environment variable.
 | httpbin.dev | `httpbin.dev` | | HTTP testing service; link is built locally (`/redirect-to?url=`) |
 | Postman Echo | `postman-echo` | | HTTP testing service; link is built locally (`/redirect-to?url=`) |
 | YOURLS (self-hosted) | `yourls+<base-url>` | `RAIL_YOURLS_SIGNATURE` | Your own instance |
+| Kutt (self-hosted) | `kutt+<base-url>` | `RAIL_KUTT_KEY` | Your own instance. Asks for an existing link instead of minting a duplicate |
+| Shlink (self-hosted) | `shlink+<base-url>` | `RAIL_SHLINK_KEY` | Your own instance. Asks for an existing link instead of minting a duplicate |
 | RAIL | `rail+<base-url>`, e.g. `rail+http://leaf-a.rail.localhost:8081` | | |
 | None (Degraded Leaf) | `none` | | |
 
 Credentials are read from the environment and never appear in vendor identifiers, so
-`/api/topology`, `/api/tree` and the logs list vendors without exposing secrets.
+`/api/topology`, `/api/tree` and the logs list vendors without exposing secrets. A tier that
+lists a vendor without its credentials refuses to start, naming the missing variable.
 
-The following were evaluated and rejected. httpbin.org and httpbingo.org restrict `redirect-to` to
-example domains. Bitly free links display an advertisement first. Google, Facebook and LinkedIn
-redirectors present warning pages. goo.gl no longer issues links.
+### Licensed vendors
+
+For organizations whose procurement policy requires a commercial relationship with every link in
+the chain, RAIL supports the following account-based vendors. Each one expects its credentials in
+the environment.
+
+| Vendor | Identifier | Credentials | Free tier | Verification |
+| --- | --- | --- | --- | --- |
+| x.gd | `x.gd` | `RAIL_XGD_KEY` | Yes; key issued by e-mail | Live |
+| Cuttly | `cutt.ly` | `RAIL_CUTTLY_KEY` | 30 links a month, 3 API calls a minute | Live |
+| Short.io | `short.io` | `RAIL_SHORTIO_KEY`, `RAIL_SHORTIO_DOMAIN` | 1,000 links in total | Contract tests |
+| Dub | `dub` | `RAIL_DUB_TOKEN` | 25 links a month; work e-mail required | Contract tests |
+| Rebrandly | `rebrandly` | `RAIL_REBRANDLY_KEY` | 10 links a month | Contract tests |
+| Linkly | `linkly` | `RAIL_LINKLY_KEY`, `RAIL_LINKLY_WORKSPACE` | 100 links a month | Contract tests |
+| Bitly | `bitly` | `RAIL_BITLY_TOKEN` | Links display an advertisement first; paid plans redirect directly | Contract tests |
+| T.ly | `t.ly` | `RAIL_TLY_TOKEN` | None; the API requires a paid plan | Contract tests |
+
+*Live* means a production account minted links through RAIL and those links redirected to their
+destination. Kutt and Shlink are verified the same way against self-hosted instances. *Contract
+tests* means RAIL is tested against a replica of the vendor's documented API, and the vendor has
+not yet been onboarded. `RAIL_SHORTIO_DOMAIN` is the domain Short.io assigned to the account.
+
+Licensed vendors bill per link, and RAIL creates one link per destination per vendor, so a
+destination costs as many links as there are licensed vendors in the tier. Link creation is the
+only licensed call: verification sweeps follow the published short link and never call a vendor's
+API.
+
+The following were evaluated and rejected. kutt.to has suspended sign-ups (self-hosted Kutt is
+supported). tiny.cc accepts new API users by application form only. Replug and Switchy restrict
+their APIs to agency plans or support requests. Sniply frames the destination instead of
+redirecting to it, and Firebase Dynamic Links was shut down. httpbin.org and httpbingo.org
+restrict `redirect-to` to example domains. Google, Facebook and LinkedIn redirectors present
+warning pages. goo.gl no longer issues links.
 
 ### Balancing strategies
 
