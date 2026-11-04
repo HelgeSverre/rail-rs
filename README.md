@@ -353,7 +353,7 @@ the environment.
 | --- | --- | --- | --- | --- |
 | x.gd | `x.gd` | `RAIL_XGD_KEY` | Yes; key issued by e-mail | Live |
 | Cuttly | `cutt.ly` | `RAIL_CUTTLY_KEY` | 30 links a month, 3 API calls a minute | Live |
-| Short.io | `short.io` | `RAIL_SHORTIO_KEY`, `RAIL_SHORTIO_DOMAIN` | 1,000 links in total | Contract tests |
+| Short.io | `short.io` | `RAIL_SHORTIO_KEY`, `RAIL_SHORTIO_DOMAIN` | 1,000 links in total; redirects need a verified phone number | Minting live |
 | Dub | `dub` | `RAIL_DUB_TOKEN` | 25 links a month; work e-mail required | Contract tests |
 | Rebrandly | `rebrandly` | `RAIL_REBRANDLY_KEY` | 10 links a month | Contract tests |
 | Linkly | `linkly` | `RAIL_LINKLY_KEY`, `RAIL_LINKLY_WORKSPACE` | 100 links a month | Contract tests |
@@ -363,7 +363,10 @@ the environment.
 *Live* means a production account minted links through RAIL and those links redirected to their
 destination. Kutt and Shlink are verified the same way against self-hosted instances. *Contract
 tests* means RAIL is tested against a replica of the vendor's documented API, and the vendor has
-not yet been onboarded. `RAIL_SHORTIO_DOMAIN` is the domain Short.io assigned to the account.
+not yet been onboarded. *Minting live* means a production account minted links through RAIL, but
+the vendor withholds the redirect until the account owner verifies a phone number; until then
+Short.io answers 403 and RAIL reports the mirror unhealthy. `RAIL_SHORTIO_DOMAIN` is the domain
+Short.io assigned to the account.
 
 Licensed vendors bill per link, and RAIL creates one link per destination per vendor, so a
 destination costs as many links as there are licensed vendors in the tier. Link creation is the
