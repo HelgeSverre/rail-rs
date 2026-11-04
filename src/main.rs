@@ -34,7 +34,9 @@ struct ServeArgs {
     /// Base URL this instance is reachable at. Short URLs are minted under it.
     #[arg(long, env = "RAIL_PUBLIC_URL", default_value = "http://localhost:8080")]
     public_url: Url,
-    /// Comma-separated upstreams (see the README for the list), rail+<url>, yourls+<url>, or "none".
+    /// Comma-separated upstreams (see the README for the list), rail+, yourls+, kutt+ or
+    /// shlink+ followed by a base URL, or "none". Keyed upstreams read their secrets from
+    /// RAIL_*_KEY / RAIL_*_TOKEN environment variables.
     #[arg(
         long = "upstream",
         env = "RAIL_UPSTREAMS",
@@ -104,10 +106,9 @@ async fn main() -> Result<()> {
 }
 
 async fn serve(args: ServeArgs) -> Result<()> {
-    let credentials = Credentials {
-        tinyurl_token: args.tinyurl_token.filter(|t| !t.is_empty()),
-        yourls_signature: args.yourls_signature.filter(|s| !s.is_empty()),
-    };
+    let credentials = Credentials::from_env()
+        .with("RAIL_TINYURL_TOKEN", args.tinyurl_token)
+        .with("RAIL_YOURLS_SIGNATURE", args.yourls_signature);
     let upstreams =
         rail::upstream::parse_all(args.upstreams.iter().map(String::as_str), &credentials)?;
     let config = Config {

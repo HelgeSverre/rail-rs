@@ -41,7 +41,7 @@ pub struct Config {
     /// Accept targets on loopback, private and link-local addresses. Off by default: every
     /// target is fetched by the health checker, so this would make RAIL an SSRF probe.
     pub allow_private_targets: bool,
-    /// Keys for keyed upstreams (tinyurl-api, yourls+).
+    /// Secrets for keyed upstreams, by environment variable name.
     pub credentials: Credentials,
 }
 
