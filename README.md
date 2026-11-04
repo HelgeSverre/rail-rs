@@ -364,8 +364,7 @@ the environment.
 destination. Kutt and Shlink are verified the same way against self-hosted instances. *Contract
 tests* means RAIL is tested against a replica of the vendor's documented API, and the vendor has
 not yet been onboarded. Short.io withholds redirects with a 403 until the account owner verifies a
-phone number. `RAIL_SHORTIO_DOMAIN` is the domain
-Short.io assigned to the account.
+phone number. `RAIL_SHORTIO_DOMAIN` is the domain Short.io assigned to the account.
 
 Licensed vendors bill per link, and RAIL creates one link per destination per vendor, so a
 destination costs as many links as there are licensed vendors in the tier. Link creation is the
