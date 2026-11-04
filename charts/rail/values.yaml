@@ -20,6 +20,11 @@ resources:
   requests: { cpu: 5m, memory: 16Mi }
   limits: { memory: 64Mi }
 
+# Credentials for licensed vendors (RAIL_XGD_KEY, RAIL_CUTTLY_KEY, ...; see the README), loaded
+# into every instance from an existing Secret. An instance can name its own with
+# `credentialsSecret`. The chart never creates the Secret.
+credentialsSecret: ""
+
 # The topology. Upstreams are shortener names (is.gd, tinyurl, da.gd, spoo.me, ...; see the README) or
 # `rail:<instance>` to reference another instance in this release. Cycles are allowed to
 # deploy, and RAIL refuses them at runtime, as is tradition.

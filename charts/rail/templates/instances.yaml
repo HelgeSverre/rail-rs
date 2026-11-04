@@ -74,6 +74,11 @@ spec:
               value: {{ $instance.strategy | default $root.Values.defaultStrategy | quote }}
             - name: RAIL_HEALTH_INTERVAL
               value: {{ $root.Values.healthInterval | quote }}
+          {{- with ($instance.credentialsSecret | default $root.Values.credentialsSecret) }}
+          envFrom:
+            - secretRef:
+                name: {{ . | quote }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ $root.Values.port }}
