@@ -184,7 +184,7 @@ ships its own resolver fallback for operating systems that have not read RFC 676
 ### Kubernetes (Helm)
 
 ```sh
-helm install rail oci://ghcr.io/helgesverre/charts/rail --version 0.2.0 \
+helm install rail oci://ghcr.io/helgesverre/charts/rail --version 0.3.0 \
   -n rail --create-namespace --wait
 helm test rail -n rail
 ```

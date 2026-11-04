@@ -1,6 +1,6 @@
 [package]
 name = "rail"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Redundant Array of Inexpensive Links: enterprise-grade URL shortener redundancy via nested load balancing across third-party URL shorteners"
 license = "MIT"
